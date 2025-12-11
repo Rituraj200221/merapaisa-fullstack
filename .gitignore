@@ -1,0 +1,10 @@
+# Python
+venv/
+*.pyc
+__pycache__/
+db.sqlite3
+.env
+
+# Node (Client ke liye backup rule)
+node_modules/
+dist/
