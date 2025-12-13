@@ -10,6 +10,8 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import dj_database_url
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -81,16 +83,13 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'merapaisa_db',  # Our Apps name
-        'USER': 'rituraj',    #  mera databse ka user name 
-        'PASSWORD':  '',      # password 
-        'HOST': '', 
-        'POST': '', 
-    }
-}    
-
+    'default': dj_database_url.config(
+        # Laptop par SQLite chalega
+        default='sqlite:///db.sqlite3',
+        # Render par wo khud DATABASE_URL utha lega
+        conn_max_age=600
+    )
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
