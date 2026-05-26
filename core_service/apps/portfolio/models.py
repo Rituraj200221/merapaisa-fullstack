@@ -26,6 +26,7 @@ class Asset(models.Model):
     
     # Live Value (Updated by our FastAPI later)
     current_market_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
     last_updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):

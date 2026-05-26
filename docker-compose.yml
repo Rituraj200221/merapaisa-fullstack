@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: merapaisa-db
+    restart: always
+    environment:
+      POSTGRES_DB: merapaisa
+      POSTGRES_USER: merapaisa_user
+      POSTGRES_PASSWORD: merapaisa_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - merapaisa-db-data:/var/lib/postgresql/data
+
+  core_service:
+    build:
+      context: .
+      dockerfile: ./core_service/Dockerfile
+    container_name: merapaisa-core-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./core_service:/app
+    environment:
+      DATABASE_URL: postgres://merapaisa_user:merapaisa_pass@db:5432/merapaisa
+      DEBUG: "True"
+    depends_on:
+      - db
+
+  market_service:
+    build:
+      context: .
+      dockerfile: ./market_service/Dockerfile
+    container_name: merapaisa-market-backend
+    restart: always
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./market_service:/app
+    environment:
+      DATABASE_URL: postgres://merapaisa_user:merapaisa_pass@db:5432/merapaisa
+    depends_on:
+      - db
+
+  client:
+    build:
+      context: .
+      dockerfile: ./client/Dockerfile
+    container_name: merapaisa-frontend
+    restart: always
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - core_service
+      - market_service
+
+volumes:
+  merapaisa-db-data:

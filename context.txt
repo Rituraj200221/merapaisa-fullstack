@@ -1,0 +1,434 @@
+================================================================================
+  MERAPAISA ELITE FINTECH - FULL CODEBASE CONTEXT REFERENCE
+  Auto-generated knowledge snapshot — Read this first before touching any file!
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PROJECT STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+merapaisa-fullstack/
+├── context.txt                      ← THIS FILE (codebase knowledge map)
+├── requirements.txt                 ← Python deps for core + market services
+├── docker-compose.yml               ← 4 services: db, core_service, market_service, client
+├── build.sh                         ← Build helper script
+├── implementation Plan              ← Original master blueprint (5 phases)
+│
+├── core_service/                    ← Django backend (Port 8000)
+│   ├── config/
+│   │   ├── settings.py              ← Django config, JWT, SMTP, CORS
+│   │   └── urls.py                  ← URL router (all API endpoints here)
+│   └── apps/
+│       ├── api.py                   ← ALL serializers + viewsets + views (main file)
+│       ├── finances/
+│       │   └── models.py            ← Category, Transaction, Budget, UserProfile,
+│       │                               UserDevice, MarketingCampaign, Notification
+│       ├── obligations/
+│       │   └── models.py            ← Loan, Debt, EMIPayment + post_save signals
+│       ├── portfolio/
+│       │   └── models.py            ← Asset (stocks, MF, gold, crypto)
+│       └── utils/
+│           ├── emails.py            ← send_verification_otp(), send_reset_otp()
+│           └── scheduler.py        ← MeraPaisaBackgroundScheduler.send_email_statement_digest()
+│
+├── market_service/                  ← FastAPI market data (Port 8001)
+│   ├── main.py                      ← FastAPI app + CORS
+│   └── routers/
+│       ├── stocks.py                ← /stocks/price/{symbol}, /stocks/sentiment/{symbol}
+│       └── mutual_funds.py         ← /funds/... (mftool based)
+│
+└── client/                          ← Vite + React frontend (Port 5173)
+    ├── .env.development             ← VITE_API_URL=http://localhost:8000
+    │                                   VITE_MARKET_URL=http://localhost:8001
+    └── src/
+        ├── App.jsx                  ← React Router setup (routes list below)
+        ├── Dashboard.jsx            ← Main protected page (1354 lines)
+        ├── components/
+        │   ├── AIFloatingAdvisor.jsx  ← Floating Gemini AI chat widget
+        │   ├── BudgetsDrawer.jsx     ← Sliding glassmorphic budget sidebar
+        │   ├── DashboardCard.jsx     ← Reusable card (supports budgetStats prop)
+        │   ├── MarketingPopup.jsx    ← Campaign overlay popup
+        │   └── PrivateRoute.jsx      ← JWT guard, redirects to /login
+        ├── pages/
+        │   ├── LoginPage.jsx         ← JWT login + email/username + password toggle
+        │   ├── RegisterPage.jsx      ← Registration + device token capture
+        │   ├── VerifyEmailPage.jsx   ← 6-digit OTP input blocks
+        │   ├── ForgotPasswordPage.jsx← Forgot pw form
+        │   ├── ResetPasswordPage.jsx ← Reset pw form
+        │   ├── IncomePage.jsx        ← Income transactions + category filter
+        │   ├── ExpensesPage.jsx      ← Expense transactions + category filter
+        │   ├── LoansPage.jsx         ← Bank loans management
+        │   ├── EMIPage.jsx           ← EMI payment tracker
+        │   ├── InvestmentsPage.jsx   ← Portfolio + live prices + technical sentiment
+        │   └── LendingsPage.jsx      ← Informal lending/borrowing (khata)
+        └── services/
+            └── api_core.js          ← Axios client + JWT interceptor + all coreService methods
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DOCKER COMPOSE (docker-compose.yml)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Service         Container Name              Port
+db              merapaisa-db               5432 (PostgreSQL 15)
+core_service    merapaisa-core-backend     8000 (Django)
+market_service  merapaisa-market-backend   8001 (FastAPI)
+client          merapaisa-frontend         5173 (Vite React)
+
+ENV vars in core_service:
+  DATABASE_URL=postgres://merapaisa_user:merapaisa_pass@db:5432/merapaisa
+  DEBUG=True
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BACKEND DJANGO MODELS (core_service)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── finances/models.py ──────────────────────
+
+Category
+  fields: id, name(50), type(INCOME|EXPENSE), user(FK→User)
+  constraint: unique_together = (name, user, type)
+  signal: none
+  note: Every category belongs to a specific user (NO global cats)
+
+Transaction
+  fields: id, user(FK), category(FK→Category, null=True), amount(decimal),
+          date(DateField, default=today), description(text, null), is_deleted(bool),
+          created_at(datetime, auto)
+  read_only: user
+  signal: post_save → check_budget_on_transaction()
+    └─ If expense category, checks budget limit:
+       ≥80% → creates Notification(threshold=80, BUDGET_ALERT)
+       ≥100% → creates Notification(threshold=100, BUDGET_ALERT)
+       Dedup: won't send same threshold+category+month notification twice
+
+Budget
+  fields: id, user(FK), category(FK→Category), amount_limit(decimal),
+          month(DateField - any day of month = full month applies), is_deleted(bool)
+  note: Soft delete. month field = entire calendar month applies.
+
+UserProfile (auto-created via post_save signal on User creation)
+  fields: user(OneToOne), is_verified(bool), verification_code(6 char),
+          reset_code(6 char)
+  signal: create_user_profile() auto-creates on User.create
+  note: Superusers bypass email verification check on login
+
+UserDevice
+  fields: id, user(FK), device_token(255, unique), device_type(50), last_active(auto)
+
+MarketingCampaign
+  fields: id, title(200), subtitle(200, null), content(text, markdown),
+          image(ImageField, upload_to='campaigns/', optional), cta_text(50), cta_link(255),
+          start_date, end_date, is_active(bool), target_filter(ALL|NO_INVESTMENTS|DEBTORS)
+  note: Filtered by target_filter logic in ActiveMarketingCampaignView
+
+Notification
+  fields: id, user(FK), title(200), message(text), notification_type(BUDGET_ALERT|INFO|SYSTEM),
+          is_read(bool), created_at(auto), category(FK→Category, null),
+          threshold(int, null - 80 or 100), alert_month(DateField, null), is_deleted(bool)
+
+── obligations/models.py ───────────────────
+
+Loan
+  fields: id, user(FK), name(100), loan_type(HOME|CAR|PERSONAL|EDUCATION|OTHER),
+          total_principal(decimal), interest_rate(decimal %), start_date, tenure_months(int),
+          emi_amount(decimal), is_deleted(bool), created_at(auto)
+  signal: post_save → sync_loan_to_transaction()
+    └─ On create: auto-creates INCOME transaction category="Loan", amt=total_principal
+
+Debt (Informal lending/borrowing — the "Khata")
+  fields: id, user(FK), person_name(100), debt_type(GIVEN|TAKEN),
+          amount(decimal), description(text, null), transaction_date(DateField),
+          due_date(DateField, null), status(PENDING|PARTIAL|SETTLED), is_deleted(bool)
+  signal: post_save → sync_debt_to_transaction()
+    └─ TAKEN: auto-creates INCOME transaction category="Borrowing"
+    └─ GIVEN: auto-creates EXPENSE transaction category="Lending"
+
+EMIPayment
+  fields: id, loan(FK→Loan), due_date, amount_due(decimal), is_paid(bool),
+          payment_date(null), remarks(200, null), is_deleted(bool)
+  signal: post_save → sync_emi_to_transaction()
+    └─ On is_paid=True: auto-creates EXPENSE transaction category="EMI"
+       (dedup check on user+description+date to prevent double-log)
+
+── portfolio/models.py ─────────────────────
+
+Asset
+  fields: id, user(FK), name(100), symbol(50), asset_type(STOCK|MF|GOLD|CRYPTO),
+          quantity(decimal, 4dp), buy_price_avg(decimal), current_market_price(decimal, null),
+          is_deleted(bool), last_updated(auto)
+  properties: total_invested_value, current_value (= qty × cmp, 0 if no cmp)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BACKEND API ENDPOINTS (api.py → urls.py)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Base: http://localhost:8000/api/
+
+AUTH (AllowAny, throttled 'sensitive' scope):
+  POST /api/auth/register/           RegisterView → creates User + UserProfile + sends OTP email
+  POST /api/auth/login/              CustomTokenObtainPairView → returns {access, refresh, user{id,username,email}}
+  POST /api/auth/token/refresh/      TokenRefreshView (simplejwt)
+  POST /api/auth/verify-email/       VerifyEmailView → {email, code}
+  POST /api/auth/forgot-password/    ForgotPasswordView → {email} → sends reset OTP
+  POST /api/auth/reset-password/     ResetPasswordView → {email, code, new_password}
+
+DATA (IsAuthenticated, user-scoped get_queryset):
+  /api/loans/              LoanViewSet     CRUD (soft delete, filter: user+is_deleted=False)
+  /api/debts/              DebtViewSet     CRUD (soft delete)
+  /api/assets/             AssetViewSet    CRUD (soft delete)
+  /api/transactions/       TransactionViewSet  CRUD (soft delete)
+  /api/emi-payments/       EMIPaymentViewSet   CRUD (soft delete, filter: loan__user)
+  /api/categories/         CategoryViewSet     CRUD (filter: user, no soft delete)
+  /api/budgets/            BudgetViewSet   CRUD (soft delete)
+  /api/notifications/      NotificationViewSet  (soft delete, ordered: -created_at)
+    └─ PATCH /api/notifications/{id}/ → mark is_read=True
+  /api/recycle-bin/        RecycleBinViewSet   list deleted items
+    └─ POST /api/recycle-bin/{id}/restore/ → restores item
+    └─ POST /api/recycle-bin/{id}/purge/   → hard deletes item
+
+SPECIAL ENDPOINTS:
+  GET  /api/marketing/active/        ActiveMarketingCampaignView → filters by target_filter
+                                     logic: ALL, NO_INVESTMENTS, DEBTORS
+  POST /api/ai/audit/                AIFinancialAuditView → Gemini 1.5 Flash audit report
+                                     accepts: {prompt: "custom question"}
+                                     builds context: income, expense, budgets, loans, assets, debts
+  GET  /api/export/{format_type}/    FinancialExportView → csv or pdf (reportlab/HTML fallback)
+  POST /api/scheduler/trigger/       SchedulerTriggerView → triggers email statement digest
+
+SERIALIZERS:
+  LoanSerializer          - __all__ fields, read_only: user
+  DebtSerializer          - __all__ fields, read_only: user
+  AssetSerializer         - __all__ fields, read_only: user
+  TransactionSerializer   - [id, amount, description, date, category, category_name, category_type, user]
+                            category_name + category_type are read_only SerializerMethodField
+  CategorySerializer      - [id, name, type, user], read_only: user
+  EMIPaymentSerializer    - __all__ + loan_name (read_only from loan.name)
+  BudgetSerializer        - [id, category, category_name, amount_limit, month, is_deleted, user]
+  MarketingCampaignSerializer - includes image_url (absolute URL via request.build_absolute_uri)
+  NotificationSerializer  - __all__ fields, read_only: user
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FASTAPI MARKET SERVICE ENDPOINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Base: http://localhost:8001/
+
+  GET /stocks/price/{symbol}        → {symbol, current_price, change, change_percent, currency}
+                                      Caches 5 min (thread-safe). Uses yfinance.
+  GET /stocks/sentiment/{symbol}    → {symbol, current_price, sma_50, sma_200,
+                                        sentiment(BULLISH|NEUTRAL|BEARISH), emoji, summary}
+                                      SMA-50 vs SMA-200 crossover algo. Caches 5 min.
+  GET /funds/...                    → mftool based mutual fund data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FRONTEND REACT CLIENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── Router (App.jsx) ─────────────────────────
+Public Routes:
+  /login              → LoginPage.jsx
+  /register           → RegisterPage.jsx
+  /verify-email       → VerifyEmailPage.jsx
+  /forgot-password    → ForgotPasswordPage.jsx
+  /reset-password     → ResetPasswordPage.jsx
+
+Protected Routes (wrapped in <PrivateRoute>):
+  /                   → Dashboard.jsx
+  /incomes            → IncomePage.jsx
+  /expenses           → ExpensesPage.jsx
+  /loans              → LoansPage.jsx
+  /emis               → EMIPage.jsx
+  /investments        → InvestmentsPage.jsx
+  /lendings           → LendingsPage.jsx
+
+── Auth Flow ─────────────────────────────────
+localStorage keys:
+  accessToken    → Bearer JWT (auto-injected by axios interceptor)
+  refreshToken   → Used for silent refresh on 401
+  user           → {id, username, email}
+
+PrivateRoute: checks accessToken existence, redirects to /login if missing
+Axios Interceptor:
+  - Request: injects Authorization: Bearer <accessToken>
+  - Response 401: tries token refresh → if fails, clears storage → redirects /login
+  - Logout: clears dismissed_campaign_* keys from localStorage too
+
+── Dashboard.jsx (main file, ~1354 lines) ────
+State:
+  loading, totalIncome, totalExpense, totalLoans, totalEMI, totalLendings,
+  totalBorrowings, totalNetWealth, transactions, allTransactions,
+  budgets[], showBudgetsDrawer, notifications[], showNotifPanel,
+  showRecycleBin, wealthGoal, showGoalEditor, user{username, email}
+
+Key functions:
+  fetchData()         → parallel fetch: transactions, loans, debts, assets, EMI, budgets, notifications
+  handleLogout()      → clears localStorage (including dismissed_campaign_*) → /login
+  getBudgetConsumptonStats() → returns {limit, spent, percent} for current month aggregate
+                               Used to power the expenses card budget bar
+  handleRestoreItem() → calls coreService.restoreItem(), refreshes data
+  handlePurgeItem()   → calls coreService.purgeItem(), refreshes data
+
+Header section:
+  - App title "Mera Paisa"
+  - 🎯 Budget trigger button → opens BudgetsDrawer
+  - 🗑️ Recycle Bin button → opens RecycleBin drawer
+  - 🔔 Notification Bell (badge shows unread count) → opens Notification panel
+  - User pill (username + email)
+  - Logout button
+
+Hero Banner (Net Wealth Card):
+  - SVG Wealth Goal progress ring (circular, animates on mount)
+  - Ambient circular Budget consumption ring (beside wealth ring)
+    Clicking opens BudgetsDrawer
+  - Net Worth number display
+  - User name, email
+
+Dashboard Cards Grid (DashboardCard.jsx):
+  - My Income    (green, /incomes)
+  - My Expenses  (red, /expenses, budgetStats prop → shows progress bar at bottom)
+  - My EMIs      (amber, /emis)
+  - My Loans     (purple, /loans)
+  - Lend & Borrow Card (custom two-column: green↗ Lent + red↘ Borrowed)
+  - My Investments (indigo, /investments)
+
+Components on page:
+  <MarketingPopup /> → overlays campaigns
+  <BudgetsDrawer />  → right-sliding budget manager
+  <AIFloatingAdvisor /> → floating Gemini chat bubble
+
+── api_core.js (Axios service layer) ─────────
+API_URL: VITE_API_URL/api or https://merapaisa-backend.onrender.com/api
+
+coreService methods:
+  Auth:         register, login, verifyEmail, forgotPassword, resetPassword
+  Loans:        getLoans, createLoan, deleteLoan
+  Debts:        getDebts, createDebt, deleteDebt
+  Assets:       getAssets, createAsset, deleteAsset
+  Transactions: getTransactions, createTransaction, deleteTransaction
+  EMI:          getEMIPayments, createEMIPayment, deleteEMIPayment
+  Categories:   getCategories, createCategory
+  Budgets:      getBudgets, createBudget, deleteBudget
+  Notifications: getNotifications, markNotificationRead, clearNotification
+  Marketing:    getActiveCampaigns
+  AI:           getAIAudit(prompt)
+  RecycleBin:   getRecycleBin, restoreItem(id, type), purgeItem(id, type)
+  Scheduler:    triggerEmailStatementDigest
+
+── Components ────────────────────────────────
+
+DashboardCard.jsx
+  Props: title, value, subtext, color, link, icon, onClick, budgetStats
+  budgetStats = {limit, percent} → if limit>0 renders progress bar at card bottom
+  Bar colors: green(<80%) / amber(80-100%) / red-blink(>=100%)
+  If onClick: wraps in <div onClick>
+  If link: wraps in <Link to>
+  Note: overflow:hidden on card to clip budget bar within border-radius
+
+BudgetsDrawer.jsx
+  Props: isOpen, onClose, totalExpense, onBudgetUpdate, allTransactions
+  Fetches: getBudgets() + getCategories() on open
+  States: budgets[], categories[], selectedCategory, amountLimit, month,
+          showNewCatForm, newCatName, newCatType, saving, savingCat
+  Sections:
+    1. Set Budget Form (category select + inline New Category mini-form)
+    2. Active Budget Status (per-budget progress bars with spent/limit math)
+  calculateSpentForCategory(catName, budgetMonthStr) → filters allTransactions
+
+AIFloatingAdvisor.jsx
+  Floating bottom-right chat bubble
+  Sends to: POST /api/ai/audit/ with custom prompt
+  Renders markdown response with typewriter streaming effect
+  Glassmorphic design
+
+MarketingPopup.jsx
+  On mount: fetches getActiveCampaigns()
+  Respects localStorage dismissed_campaign_{id} to skip shown campaigns
+  Overlay with glassmorphism, entrance/exit animations
+  CTA button → navigates to cta_link
+
+PrivateRoute.jsx
+  Checks localStorage.accessToken → if missing redirects to /login
+  Uses <Outlet> for nested routes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KEY BUSINESS LOGIC / ALGORITHMS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Auto Transaction Sync (Backend Signals):
+   Loan created     → INCOME tx (category: "Loan", amount: total_principal)
+   Debt TAKEN       → INCOME tx (category: "Borrowing", amount: debt.amount)
+   Debt GIVEN       → EXPENSE tx (category: "Lending", amount: debt.amount)
+   EMI is_paid=True → EXPENSE tx (category: "EMI", amount: amount_due) [dedup check]
+
+2. Budget Alert Engine (Backend Signal on Transaction.post_save):
+   On every expense transaction save:
+     - Check if Budget exists for same user + category + month
+     - Calculate total_spent for that category/month
+     - If ≥80%: create Notification(threshold=80) if not already exists
+     - If ≥100%: create Notification(threshold=100) if not already exists
+
+3. Marketing Campaign Targeting (ActiveMarketingCampaignView):
+   ALL          → show to everyone
+   NO_INVESTMENTS → show if user has no Asset records
+   DEBTORS      → show if user has Loan OR Debt(TAKEN) records
+
+4. AI Audit Context (AIFinancialAuditView):
+   Collects: income_total, expense_total, category_spending{},
+             budget_details[], loan_details[], asset_details[], debt_details[]
+   Sends to: Gemini 1.5 Flash as a structured prompt
+   Returns: markdown financial health report
+
+5. Budget Consumption (Frontend getBudgetConsumptonStats()):
+   Aggregates all budgets for current month
+   Cross-references allTransactions filtered by category_name + current month
+   Returns: {limit: totalBudgetLimit, spent: totalSpent, percent: (spent/limit)*100}
+
+6. Technical Sentiment (FastAPI /stocks/sentiment/{symbol}):
+   Fetches 1y daily history via yfinance
+   Calculates SMA-50 and SMA-200
+   If price > SMA-50 > SMA-200 → BULLISH
+   If price < SMA-50 < SMA-200 → BEARISH
+   Else → NEUTRAL
+   Caches 5 minutes per symbol
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PYTHON DEPENDENCIES (requirements.txt)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Django==5.2.9, djangorestframework, djangorestframework-simplejwt
+django-cors-headers, django-unfold (admin theme)
+dj-database-url, gunicorn, whitenoise, psycopg2-binary
+google-generativeai, requests, pydantic
+fastapi, uvicorn, yfinance, mftool
+pandas, numpy, beautifulsoup4, bs4, curl_cffi
+matplotlib, reportlab
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  WHAT PHASE 5 NEEDS TO BUILD
+  (React Native Android SMS Auto-Tracker)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+New directory: /merapaisa-fullstack/mobile/
+Stack: React Native (Expo bare or bare CLI), SQLite, SMS BroadcastReceiver
+Target API: POST /api/transactions/ (existing endpoint, needs JWT)
+Auth: Same JWT system — user logs in on mobile, stores accessToken in SecureStore/AsyncStorage
+
+Key flows:
+  1. Login screen → POST /api/auth/login/ → store tokens
+  2. SMS BroadcastReceiver → wakes only on new SMS (0% idle battery)
+  3. Regex parser → extracts: amount, vendor, bank, direction(credit/debit)
+  4. SQLite → writes parsed SMS locally (offline-first)
+  5. NetInfo → when online, batch syncs to POST /api/transactions/
+  6. Dashboard screen → shows synced transactions grouped by day
+  7. Settings screen → category mapping rules, sync status, toggle parser
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  NOTES & GOTCHAS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Category.user is required (non-null). No "global" categories exist.
+  Users must create their own categories before budgets/transactions.
+- BudgetsDrawer now has inline New Category form to solve the empty dropdown UX.
+- DashboardCard.budgetStats: pass {limit, percent} to get progress bar at bottom.
+  Card has overflow:hidden to clip bar within rounded corners.
+- Migrations must be run after ANY model change:
+  docker exec -it merapaisa-core-backend python manage.py migrate
+- Marketing campaigns: end_date__ge= typo is correct Django ORM syntax.
+  Actual query uses __gte (check if end_date >= today).
+- Loans EMI schedule pages are separate (/loans → LoansPage, /emis → EMIPage).
+- allTransactions in Dashboard contains ALL user transactions (used for budget math).
+- BudgetsDrawer receives allTransactions prop from Dashboard for client-side spent calc.
+================================================================================

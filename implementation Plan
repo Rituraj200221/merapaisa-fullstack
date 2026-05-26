@@ -1,0 +1,95 @@
+Master Implementation Plan - MeraPaisa Elite Fintech Startup Suite
+This plan outlines the complete, production-grade architecture to scale MeraPaisa into an industry-leading startup application. We will implement high-security authentication, dynamic database entry forms, real-time targeted marketing popups, automated budget alerts, a Google Gemini AI advisor, and a lightweight, battery-optimized React Native Android SMS expense auto-tracker app.
+
+Architecture Blueprint
+Data Storage & Communications
+Backend Service Core
+Gateway & Routing
+Frontend Client Layer
+Vite React Web App
+React Native Mobile App
+Axios Interceptor - Bearer JWT Auth
+Axios Mobile Client - Offline SQLite Sync
+Django Core API Backend - Port 8000
+FastAPI Live Market Data - Port 8001
+PostgreSQL DB
+Google Gemini 1.5 Flash AI API
+Outgoing SMTP Mail Server
+yfinance & mftool
+Proposed Phases & Milestones
+Phase 1: 🔐 JWT Authentication, Outgoing SMTP, and Data Isolation
+Goal: Enable bulletproof JWT authentication, dynamically toggle real/mock email verification, and secure all backend endpoints with strict user-level data isolation.
+Backend Changes (core_service):
+Dependencies: Add djangorestframework-simplejwt to requirements.txt.
+Settings: Add JWT configurations to settings.py and register simplejwt.authentication.JWTAuthentication.
+SMTP Configuration: Enable dynamic toggle in settings.py loading EMAIL_BACKEND (Console/SMTP), host, port, TLS, and App Passwords from environment variables (.env).
+Models:
+Add UserProfile with fields: is_verified (Boolean), verification_code (6-digit OTP), reset_code (6-digit OTP).
+Add UserDevice model with user, device_token, and device_type.
+APIs (apps/api.py):
+Register endpoints: /api/auth/register/, /api/auth/login/, /api/auth/verify-email/, /api/auth/forgot-password/, /api/auth/reset-password/.
+Secure existing ViewSets under IsAuthenticated global permissions.
+Modify get_queryset on all ViewSets to strictly filter data by self.request.user:
+python
+
+def get_queryset(self):
+    return self.queryset.filter(user=self.request.user)
+Automatically assign request.user on all record creations.
+Email Utility: Create apps/utils/emails.py using EmailMultiAlternatives to compile and send premium HTML verification and reset templates.
+Frontend Web Changes (client):
+Configure Axios interceptor in api_core.js to automatically read the JWT token from localStorage and inject the Authorization: Bearer <token> header.
+Create modern, elegant pages:
+/register (Registration Page capturing dynamic or mock device tokens).
+/login (Glassmorphism Login with dynamic errors & password toggles).
+/verify-email (6-digit dynamic OTP input blocks).
+/forgot-password & /reset-password (Sleek password reset forms).
+Build a PrivateRoute routing guard redirecting unauthenticated users to /login.
+Phase 2: ✍️ Interactive Database Entry Forms (All 6 Cards)
+Goal: Allow users to add and manage custom entries on each of their dashboard cards, permanently storing transactions, loans, assets, lendings, and EMIs to Postgres.
+Backend Changes (core_service):
+Register /api/categories/ Router ViewSet and Serializer to manage transaction categories.
+Frontend Web Changes (client):
+Build gorgeous slide-in/fade-in modal entry forms on the following screens:
+Income & Expense Pages: Dropdown selection of user categories. Checks if category exists; if not, calls /api/categories/ dynamically first, then submits transaction.
+EMI Page: Dynamic dropdown of existing Loans fetched from the backend. Posts to /api/emi-payments/ with due dates and custom amounts.
+Loans Page: Inputs for Principal, Interest %, Start Date, Tenure, and calculated monthly EMI.
+Lendings Page: Selects Person Name, Debt Type (GIVEN / TAKEN), amount, due dates, and status.
+Investments Page: Enter Asset name, Symbol, Quantity, and Average Buy Price. Automatically updates real-time quotes.
+Phase 3: 📣 Dynamic Targeted Marketing Ads & Budget Alert Engine
+Goal: Allow admins to push live promotional popups and alert notifications dynamically without modifying any code, mimicking top-tier apps.
+Backend Changes (core_service):
+Models: Add MarketingCampaign model in Django containing title, subtitle, content, image URL, CTA text, CTA redirect link, start/end dates, active status, and user_targeting filters (ALL, NO_INVESTMENTS, DEBTORS).
+API: Register /api/marketing/active/ to fetch campaigns. Backend filters records based on user profile logic (e.g. if target is NO_INVESTMENTS, check if user has active assets).
+Notifications Engine: Create a lightweight notification system. Whenever an expense transaction is added, check if current category monthly totals exceed 80% or 100% of the category Budget limit. If so, trigger a database Notification record.
+Frontend Web Changes (client):
+Hero Net Worth Card: Display total live Net Worth dynamically. Add a beautiful SVG glow progress ring representing dynamic user goals.
+Notification Bell: Add a premium bell icon on the dashboard displaying active alerts. Show instant slide-in toast warnings when a budget is crossed.
+Ad Popups: Integrate MarketingPopup.jsx overlay on the Dashboard. Queries active campaigns, respects dismiss states stored in localStorage, and triggers high-end entrance and exit animations.
+Phase 4: 🤖 Google Gemini AI Financial Advisor & Technical Sentiments
+Goal: Create an AI-powered financial advisor to run audits on the user's spending habits and technical stock trends.
+Backend Changes (core_service):
+Install google-generativeai in requirements.txt.
+Add /api/ai/audit/ endpoint. Collects user's monthly income, expenses, category spending breakdown, active debts, and investments.
+Prompts Gemini (gemini-1.5-flash) using a developer-free tier key, formatting a personalized, highly professional markdown audit report.
+FastAPI Market Service Changes (market_service):
+Add /stocks/sentiment/{symbol} endpoint utilizing historical data moving averages (SMA-50/200) to output Rule-based/Technical Sentiment: "BULLISH 📈", "NEUTRAL ⚖️", or "BEARISH 📉" with a concise summary.
+Frontend Web Changes (client):
+Create a beautiful, glowing floating AI advisor chat module in React, streaming markdown responses with smooth typewriter effects.
+Render technical sentiment badges next to portfolio stocks on the Investments page.
+Phase 5: 📱 React Native Mobile App (Android SMS Auto-Tracker)
+Goal: Create a lightweight, battery-optimized Android app that reads transaction SMS, parses details locally, and syncs offline records to Django.
+Mobile App Stack: React Native (bare CLI or optimized Expo), SQLite for local storage, react-native-get-sms-android or custom native receiver.
+Core Mechanisms:
+BroadcastReceiver Integration: Registers an OS-level listener that only wakes up the application when a new SMS is received. 0% background CPU idle battery usage!
+Regex Parser Engine: Instantly parses banking SMS:
+Pattern: Spans typical UPI, credit, and debit formats to parse: Amount, Vendor Name (e.g., Zomato, Swiggy), and Source (e.g., Bank name).
+Offline Sync Handler: Writes transaction locally to SQLite. When internet status transitions to active, triggers a HeadlessJS background sync process uploading data in batches to Django /api/transactions/.
+Size Optimization: Proguard active, splits architecture binaries, strips unused node_modules, yielding a highly compact APK size (<15MB).
+Verification & Deployment Plan
+Manual Verification Path
+Docker Compile Validation: Ensure the revised docker compose pipeline spins up cleanly with Postgres 15, Django (incorporating SimpleJWT dependencies), FastAPI, and React Vite Node 20 environment.
+Auth & SMTP Flow Check: Register a test account, check console/real inbox for dynamic HTML verification email, verify OTP, login, and confirm that only this user's data is shown on dashboard APIs.
+Interactive Entry Forms: Add new records via UI slide-in modal and confirm dynamic DB storage and list reloads.
+Targeted Campaigns & Alerts: Create a targeted campaign in Django Admin, open the React dashboard, check if the popup renders based on targeting criteria, and test budget overflow toast alerts.
+Gemini AI Audit: Trigger AI audit chatbot and verify markdown layout returns complete, personalized advice.
+Mobile APK Verification: Load the React Native client on an Android device/emulator, mock a bank SMS, check instant offline SQLite storage, and watch it synchronize smoothly to the Django API backend.

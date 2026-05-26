@@ -29,6 +29,7 @@ class Loan(models.Model):
     
     # Auto-calculated or Manual EMI
     emi_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Monthly EMI cost")
+    is_deleted = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -68,6 +69,7 @@ class Debt(models.Model):
     due_date = models.DateField(blank=True, null=True, help_text="When is it expected back?")
     
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         direction = "to" if self.debt_type == 'GIVEN' else "from"
@@ -86,7 +88,103 @@ class EMIPayment(models.Model):
     is_paid = models.BooleanField(default=False)
     payment_date = models.DateField(null=True, blank=True, help_text="Date actual payment was made")
     remarks = models.CharField(max_length=200, blank=True, null=True)
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         status = "PAID" if self.is_paid else "PENDING"
         return f"{self.loan.name} - {self.due_date} ({status})"    
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=Loan)
+def sync_loan_to_transaction(sender, instance, created, **kwargs):
+    if created and not instance.is_deleted:
+        from apps.finances.models import Category, Transaction
+        
+        # 1. Get or create category
+        category, _ = Category.objects.get_or_create(
+            name="Loan",
+            type="INCOME",
+            user=instance.user
+        )
+        
+        # 2. Create transaction
+        Transaction.objects.create(
+            user=instance.user,
+            category=category,
+            amount=instance.total_principal,
+            date=instance.start_date,
+            description=f"Bank Loan Disbursal: {instance.name}"
+        )
+
+@receiver(post_save, sender=Debt)
+def sync_debt_to_transaction(sender, instance, created, **kwargs):
+    from apps.finances.models import Category, Transaction
+    
+    if created and not instance.is_deleted:
+        if instance.debt_type == 'TAKEN':
+            # Borrowing -> Income
+            category, _ = Category.objects.get_or_create(
+                name="Borrowing",
+                type="INCOME",
+                user=instance.user
+            )
+            desc = f"Borrowed from {instance.person_name}"
+            if instance.description:
+                desc += f" - {instance.description}"
+                
+            Transaction.objects.create(
+                user=instance.user,
+                category=category,
+                amount=instance.amount,
+                date=instance.transaction_date,
+                description=desc
+            )
+        elif instance.debt_type == 'GIVEN':
+            # Lending -> Expense
+            category, _ = Category.objects.get_or_create(
+                name="Lending",
+                type="EXPENSE",
+                user=instance.user
+            )
+            desc = f"Lent to {instance.person_name}"
+            if instance.description:
+                desc += f" - {instance.description}"
+                
+            Transaction.objects.create(
+                user=instance.user,
+                category=category,
+                amount=instance.amount,
+                date=instance.transaction_date,
+                description=desc
+            )
+
+@receiver(post_save, sender=EMIPayment)
+def sync_emi_to_transaction(sender, instance, created, **kwargs):
+    from apps.finances.models import Category, Transaction
+    
+    if instance.is_paid and not instance.is_deleted:
+        desc = f"EMI Payment: {instance.loan.name}"
+        # Prevent double logging
+        exists = Transaction.objects.filter(
+            user=instance.loan.user,
+            description=desc,
+            date=instance.payment_date or date.today()
+        ).exists()
+        
+        if not exists:
+            category, _ = Category.objects.get_or_create(
+                name="EMI",
+                type="EXPENSE",
+                user=instance.loan.user
+            )
+            
+            Transaction.objects.create(
+                user=instance.loan.user,
+                category=category,
+                amount=instance.amount_due,
+                date=instance.payment_date or date.today(),
+                description=desc
+            )
